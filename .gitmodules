@@ -1,0 +1,3 @@
+[submodule "lib/opennurbs"]
+	path = lib/opennurbs
+	url = https://github.com/mcneel/opennurbs.git

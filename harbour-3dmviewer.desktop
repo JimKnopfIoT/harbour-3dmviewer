@@ -1,0 +1,31 @@
+[Desktop Entry]
+Type=Application
+X-Nemo-Application-Type=silica-qt5
+Icon=harbour-3dmviewer
+Name=3DM Viewer
+Comment=View CAD models and sliced G-code
+Exec=harbour-3dmviewer
+
+[X-Sailjail]
+# Sailjail builds a D-Bus name from these two as <Organization>.<Application>
+# and refuses to launch if the result is not a legal bus name. A name element
+# MUST NOT BEGIN WITH A DIGIT, so "3dmviewer" is rejected outright with
+#     Error: Invalid dbus-user.own name: org.threedmviewer.3dmviewer
+# and the app silently fails to start from the launcher while still running
+# fine over ssh. Using the full binary name avoids it and matches what other
+# harbour apps on the device do (harbour-base64, harbour-clipper, …).
+OrganizationName=io.github.jimknopfiot
+ApplicationName=harbour-3dmviewer
+# The app reads model files and tilts a dropped model with the accelerometer.
+# No network, no location, no camera, no D-Bus services of its own.
+#   Documents      where CAD files normally land
+#   Downloads      where a file arrives from a browser or a mail attachment
+#   RemovableMedia an SD card, which is how large models usually travel
+#   Sensors        the accelerometer, so tilting the phone steers gravity in
+#                  the drop simulation. Without it sensorfw refuses the D-Bus
+#                  connection and the log only says "There is no sensor manager
+#                  yet" — the app keeps working, the model just always falls
+#                  straight down the screen.
+# UserDirs is NOT requested: it would grant the whole home directory to an app
+# that only ever needs to open one file the user picked.
+Permissions=Documents;Downloads;RemovableMedia;Sensors
