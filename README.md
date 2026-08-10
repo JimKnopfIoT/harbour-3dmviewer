@@ -14,10 +14,17 @@ Everything runs on the device — no network, no telemetry, no cloud component.
 > the only one it has actually been verified on.
 
 <p align="center">
-  <img src="screenshots/demo.gif" width="240" alt="Turning a model, switching between solid, wireframe and see-through, opening the layer list, and dropping the model into the deep room">
-  &nbsp;&nbsp;
-  <img src="screenshots/launcher.jpg" width="240" alt="The application on the home screen">
+  <img src="screenshots/demo.gif" width="260" alt="Turning a model, switching between solid, wireframe and see-through, opening the layer list, and dropping the model into the deep room">
 </p>
+
+<p align="center">
+  <img src="screenshots/solid.png" width="155" alt="A shaded model">
+  <img src="screenshots/ghost.png" width="155" alt="The same model, see-through">
+  <img src="screenshots/wireframe.png" width="155" alt="The same model as edges only">
+  <img src="screenshots/launcher.jpg" width="155" alt="The application on the home screen">
+</p>
+
+<p align="center"><sub>Solid · see-through · wireframe · on the launcher</sub></p>
 
 ## What it does
 
