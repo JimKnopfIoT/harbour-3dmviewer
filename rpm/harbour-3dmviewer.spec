@@ -1,7 +1,7 @@
 # Neutral packaging metadata — no personal identifiers (see CLAUDE.md anonymity rules).
 Name:       harbour-3dmviewer
 Summary:    Viewer for CAD models and sliced G-code
-Version:    0.1.1
+Version:    0.1.2
 Release:    1
 # ANONYMITY: neutral build host so built RPMs carry no real hostname/domain.
 # Without this, the RPM BUILDHOST tag leaks the build machine's name and LAN
@@ -76,6 +76,14 @@ desktop-file-install --delete-original \
 %{_datadir}/icons/hicolor/*/apps/%{name}.png
 
 %changelog
+* Tue Aug 11 2026 harbour-3dmviewer contributors 0.1.2-1
+- Link with --exclude-libs,ALL. sailfishapp's -rdynamic was exporting all
+  22725 symbols that the static openNURBS archive contributed into the
+  executable's dynamic symbol table, where they preempted the system libz
+  and libuuid for every library loaded afterwards. Addresses a startup crash
+  reported on a device other than the development one, whose trace ends in
+  the hybris linker; not confirmed to be that crash, but a real defect.
+
 * Tue Aug 11 2026 harbour-3dmviewer contributors 0.1.1-1
 - Unbind GL_ARRAY_BUFFER before drawing the drop-simulation room, so its
   client-side vertex arrays cannot be read as offsets into whatever buffer
