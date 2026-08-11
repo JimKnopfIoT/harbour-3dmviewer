@@ -1,7 +1,7 @@
 # Neutral packaging metadata — no personal identifiers (see CLAUDE.md anonymity rules).
 Name:       harbour-3dmviewer
 Summary:    Viewer for CAD models and sliced G-code
-Version:    0.1.0
+Version:    0.1.1
 Release:    1
 # ANONYMITY: neutral build host so built RPMs carry no real hostname/domain.
 # Without this, the RPM BUILDHOST tag leaks the build machine's name and LAN
@@ -76,5 +76,10 @@ desktop-file-install --delete-original \
 %{_datadir}/icons/hicolor/*/apps/%{name}.png
 
 %changelog
+* Tue Aug 11 2026 harbour-3dmviewer contributors 0.1.1-1
+- Unbind GL_ARRAY_BUFFER before drawing the drop-simulation room, so its
+  client-side vertex arrays cannot be read as offsets into whatever buffer
+  Qt Quick left bound. Undefined behaviour that happened to work on Adreno.
+
 * Mon Aug 10 2026 harbour-3dmviewer contributors 0.1.0-1
 - First release: Rhino .3dm viewing, orbit/pan/zoom, per-layer visibility.

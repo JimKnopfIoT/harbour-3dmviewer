@@ -580,6 +580,19 @@ public:
         const int stride = kFloatsPerVertex * int(sizeof(float));
         const float *base = v.constData();
 
+        // The room is the ONE place drawing from a client-side array instead of
+        // a VBO, and GLES2 changes what the pointer below means depending on
+        // GL state: with a buffer bound to GL_ARRAY_BUFFER, glVertexAttribPointer
+        // reads its argument as a BYTE OFFSET INTO THAT BUFFER, not as an
+        // address. Qt Quick shares this context and makes no promise about what
+        // it left bound when render() is entered, so `base` could be read as an
+        // offset of some hundred million bytes into a scene graph buffer — a
+        // driver-dependent out-of-bounds fetch that works on one GPU and
+        // crashes on the next. Unbinding first is what makes the pointer a
+        // pointer. (Only ARRAY_BUFFER matters here: the room is drawn with
+        // glDrawArrays, which never touches the element buffer binding.)
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+
         m_program->enableAttributeArray(posLoc);
         m_program->setAttributeArray(posLoc, base, 3, stride);
         m_program->enableAttributeArray(nrmLoc);

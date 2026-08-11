@@ -91,7 +91,7 @@ Whatever cannot be shown is **said out loud**, never left silently missing.
 Download the RPM from the releases page and, on the phone:
 
 ```sh
-pkcon install-local -y harbour-3dmviewer-0.1.0-1.aarch64.rpm
+pkcon install-local -y harbour-3dmviewer-0.1.1-1.aarch64.rpm
 ```
 
 ## Building
