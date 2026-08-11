@@ -67,9 +67,16 @@ for (f, $$list($$files($$ON_DIR/*.cpp))) {
 }
 
 # zlib: the subset openNURBS ships, used for compressed mesh and bitmap chunks.
-# Its zconf.h self-defines Z_PREFIX and MY_ZCALLOC, so every symbol is renamed
-# z_* and cannot collide with a system libz pulled in by Qt. zcalloc/zcfree come
-# from opennurbs_zlib_memory.cpp above, which is why MY_ZCALLOC must stay set.
+# Its zconf.h self-defines Z_PREFIX and MY_ZCALLOC. zcalloc/zcfree come from
+# opennurbs_zlib_memory.cpp above, which is why MY_ZCALLOC must stay set.
+#
+# DO NOT believe Z_PREFIX makes this collision-proof. That list is 1.2.3-era: it
+# renames the ~30 names zlib had then and nothing since. inflateGetHeader,
+# inflatePrime, deflateSetHeader, deflateTune, crc32_combine, adler32_combine
+# and every internal (inflate_fast, inflate_table, _tr_*, _dist_code, z_errmsg)
+# keep their real names and WILL shadow the system libz if they reach a dynamic
+# symbol table. Same for android_uuid/ vs libuuid.so.1. src/src.pro links with
+# -Wl,--exclude-libs,ALL to keep them out of one — see the comment there.
 SOURCES += $$files($$ON_DIR/zlib/*.c)
 
 # android_uuid: a trimmed util-linux libuuid. Upstream builds it on Linux too,

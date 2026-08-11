@@ -26,6 +26,24 @@ QMAKE_CXXFLAGS_RELEASE += -O2 -march=armv8-a -mtune=cortex-a53
 INCLUDEPATH += $$PWD/../lib/opennurbs
 LIBS += -L$$OUT_PWD/../lib -lopennurbs
 
+# sailfishapp.pc puts -rdynamic on the link line (the mdeclarativecache booster
+# wants it). That exports EVERY symbol pulled out of libopennurbs.a into our
+# .dynsym — 22k of them — and the executable sits at the front of the global
+# lookup scope, so those definitions preempt the real ones for every library
+# loaded afterwards, hybris-loaded GPU blobs included.
+#
+# They do collide. openNURBS' bundled zlib is 1.2.3-era: its Z_PREFIX list
+# renames the ~30 names it knew about and nothing else, so inflateGetHeader,
+# inflatePrime, deflateSetHeader, deflateTune, crc32_combine, adler32_combine
+# and the internals (inflate_fast, inflate_table, _tr_*, _dist_code, z_errmsg)
+# all ship unprefixed and shadow the system libz. android_uuid/ likewise
+# shadows libuuid.so.1 with uuid_generate/uuid_pack/uuid_unpack.
+#
+# --exclude-libs makes every symbol from the static archives local without
+# touching -rdynamic, so our own symbols stay exported and the booster is
+# unaffected. Nothing dlopens openNURBS, so nothing needs it visible.
+QMAKE_LFLAGS += -Wl,--exclude-libs,ALL
+
 # --- Sources ----------------------------------------------------------------
 INCLUDEPATH += $$PWD
 
