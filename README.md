@@ -109,11 +109,22 @@ while. It is a static library, so later builds do not repeat it.
 
 ## Status & responsible use
 
-**Proof of concept**, shared **as is** with **no warranty** of any kind (see the
-GPLv3). The STEP tessellator in particular is new code judged against a small
-number of real files; if a face comes out missing or inside out, that is where
-to look. It is a viewer, not a measuring instrument — do not take a dimension
-off it and cut metal to that.
+**Proof of concept / work in progress**, shared **as is** with **no warranty**
+of any kind (see the GPLv3). It may be incomplete, rough around the edges, or
+change without notice — use it at your own risk.
+
+**It is a viewer, not a measuring instrument.** What you see is what it managed
+to read, and a shape that looks plausible is not a promise that it is right:
+the STEP tessellator is new code judged against a small number of real files,
+and Rhino geometry is only ever the render mesh the file happens to carry.
+Whatever cannot be drawn is reported rather than quietly dropped — but do not
+take a dimension off the screen and cut metal to it.
+
+**Verified on one device only** — a Sony Xperia 10 III on Sailfish OS 5.1.0.11.
+It has been reported to crash on a different device, and that report is not
+resolved. If it happens to you, please open an issue with your device model and
+the output of `harbour-3dmviewer` launched from the Terminal **on the phone**
+(over ssh there is no Wayland session and the error you get is a different one).
 
 ## Licence and credits
 
