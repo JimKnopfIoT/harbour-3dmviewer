@@ -19,6 +19,19 @@
   cached meshes. Those objects genuinely cannot be displayed by this app, so the
   reader counts them and reports them as a warning rather than showing an empty
   screen with no explanation.
+
+  WHERE THE CODE ACTUALLY IS
+  --------------------------
+  Behind this header, and only behind it, sits a dlopen. openNURBS is not
+  linked into the application: it lives in a shared object that is loaded the
+  first time a .3dm is opened, because having it in the executable image at
+  process start makes the app die during EGL setup on hybris devices with a
+  newer Android base. src/rhino/rhinoplugin.cpp carries the measurement.
+
+  Callers are not meant to care. The signature below is the same one the four
+  in-process readers use, it behaves the same way, and the one new failure —
+  "Rhino support is not installed" — arrives through the same *errorOut as
+  every other failure. Nothing outside these two files knows about the split.
 */
 #ifndef RHINOREADER_H
 #define RHINOREADER_H

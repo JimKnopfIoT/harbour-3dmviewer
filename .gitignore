@@ -4,6 +4,8 @@ Makefile
 *.a
 # mb2 builds in-tree, so the linked binary lands in src/ under the target name.
 src/harbour-3dmviewer
+# The Rhino plugin, likewise built in place.
+src/rhino/*.so
 moc_*.cpp
 moc_*.h
 qrc_*.cpp

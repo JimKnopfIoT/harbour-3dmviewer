@@ -27,6 +27,10 @@ Page {
     // the tilt that is meant to steer the fall.
     allowedOrientations: Orientation.Portrait
 
+    // CAMERA CUTOUT — see DropPage.qml. Portrait-locked as well, so the
+    // cutout is always at the top and no orientation condition is needed.
+    readonly property real topInset: Screen.topCutout.height
+
     property bool _attached: false
     onStatusChanged: {
         if (status === PageStatus.Active) {
@@ -56,7 +60,7 @@ Page {
         anchors {
             top: parent.top
             horizontalCenter: parent.horizontalCenter
-            topMargin: Theme.paddingLarge
+            topMargin: Theme.paddingLarge + page.topInset
         }
         //: Hint on the trampoline page. Flat is the interesting case: gravity
         //: then points into the screen and the model falls away down the shaft.

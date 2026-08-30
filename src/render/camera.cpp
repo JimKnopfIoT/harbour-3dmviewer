@@ -4,6 +4,7 @@
 */
 #include "render/camera.h"
 
+#include <QMatrix3x3>
 #include <QtMath>
 
 namespace {
@@ -23,11 +24,154 @@ Camera::Camera()
     , m_sceneRadius(1.0f)
     , m_farOverride(0.0f)
     , m_axisLocked(false)
+    , m_rotationMode(Centred)
+    , m_hasPivot(false)
+    , m_pivot(0.0f, 0.0f, 0.0f)
 {
+}
+
+QQuaternion Camera::orientation() const
+{
+    if (m_rotationMode == Free)
+        return m_orientation;
+
+    // The rotation lookAt() would build, written out rather than dug back out
+    // of a 4x4.
+    const QVector3D forward = (m_target - eye()).normalized();
+    QVector3D right = QVector3D::crossProduct(forward, kUp);
+    if (right.lengthSquared() < 1e-12f)
+        right = QVector3D(1.0f, 0.0f, 0.0f);   // looking straight down the up axis
+    right.normalize();
+    const QVector3D up = QVector3D::crossProduct(right, forward).normalized();
+
+    // Rows of a world -> camera rotation are the camera's axes, and the camera
+    // looks down its own -Z.
+    float v[9] = { right.x(), right.y(), right.z(),
+                   up.x(),    up.y(),    up.z(),
+                   -forward.x(), -forward.y(), -forward.z() };
+    return QQuaternion::fromRotationMatrix(QMatrix3x3(v));
+}
+
+void Camera::setRotationMode(RotationMode mode)
+{
+    if (mode == m_rotationMode)
+        return;
+
+    if (mode == Free) {
+        // Enter free rotation exactly where the turntable left off, or the
+        // model would jump the moment the button is pressed.
+        m_orientation = orientation();
+    } else if (m_rotationMode == Free) {
+        // Folding the attitude back into yaw and pitch drops the roll, which is
+        // the point: it is what puts a tumbled model straight again.
+        const QVector3D dir =
+            m_orientation.conjugated().rotatedVector(QVector3D(0.0f, 0.0f, 1.0f));
+        const float sinPitch = qBound(-1.0f, dir.z(), 1.0f);
+        m_pitchDeg = qBound(-kMaxPitch,
+                            float(qRadiansToDegrees(qAsin(sinPitch))),
+                            kMaxPitch);
+        m_yawDeg = float(qRadiansToDegrees(qAtan2(dir.y(), dir.x())));
+    }
+
+    m_rotationMode = mode;
+
+    if (mode == Centred)
+        clearPivot();
+}
+
+void Camera::setPivot(const QVector3D &worldPoint)
+{
+    m_pivot = worldPoint;
+    m_hasPivot = true;
+}
+
+void Camera::clearPivot()
+{
+    m_hasPivot = false;
+}
+
+void Camera::keepPivotFixed(const QQuaternion &before)
+{
+    if (!m_hasPivot)
+        return;
+
+    /*
+      V = translate(0,0,-distance) * R * translate(-target), so a point keeps
+      its place on screen exactly when R * (P - target) is unchanged. Solving
+      for the new target is exact: no iteration, no drift.
+    */
+    const QQuaternion after = orientation();
+    const QVector3D inCamera = before.rotatedVector(m_pivot - m_target);
+    m_target = m_pivot - after.conjugated().rotatedVector(inCamera);
+}
+
+void Camera::rotateFree(float dRightDeg, float dUpDeg)
+{
+    if (m_rotationMode != Free)
+        return;
+
+    const QQuaternion before = m_orientation;
+
+    // Composed on the LEFT, in camera space: the model follows the finger
+    // whatever attitude it is in. On the right it would turn about its own
+    // axes and stop matching the finger after a few drags.
+    const QQuaternion turn =
+        QQuaternion::fromAxisAndAngle(0.0f, 1.0f, 0.0f, dRightDeg)
+        * QQuaternion::fromAxisAndAngle(1.0f, 0.0f, 0.0f, dUpDeg);
+    m_orientation = (turn * m_orientation).normalized();
+
+    keepPivotFixed(before);
+}
+
+void Camera::roll(float dDeg)
+{
+    if (m_rotationMode != Free)
+        return;
+
+    const QQuaternion before = m_orientation;
+    m_orientation =
+        (QQuaternion::fromAxisAndAngle(0.0f, 0.0f, 1.0f, dDeg) * m_orientation)
+            .normalized();
+    keepPivotFixed(before);
+}
+
+void Camera::screenRay(float nx, float ny, QVector3D *origin, QVector3D *direction) const
+{
+    const QQuaternion r = orientation();
+    const QQuaternion inv = r.conjugated();
+
+    const float tanV = qTan(qDegreesToRadians(m_fovDeg * 0.5f));
+    // Camera space: -Z ahead, x right, y up.
+    const QVector3D dirCam(nx * tanV * m_aspect, ny * tanV, -1.0f);
+
+    if (origin)
+        *origin = eye();
+    if (direction)
+        *direction = inv.rotatedVector(dirCam).normalized();
+}
+
+QVector3D Camera::screenPointOnPlane(float nx, float ny, const QVector3D &plane) const
+{
+    QVector3D o, d;
+    screenRay(nx, ny, &o, &d);
+
+    const QQuaternion inv = orientation().conjugated();
+    const QVector3D normal = inv.rotatedVector(QVector3D(0.0f, 0.0f, 1.0f));
+
+    const float denom = QVector3D::dotProduct(normal, d);
+    if (qAbs(denom) < 1e-6f)
+        return plane;   // ray parallel to the plane; nothing sensible to say
+    const float t = QVector3D::dotProduct(normal, plane - o) / denom;
+    if (t <= 0.0f)
+        return plane;   // behind the camera
+    return o + d * t;
 }
 
 void Camera::stepAxis(int which)
 {
+    // A locked view is square-on, so it is also the way out of a tumbled one.
+    setRotationMode(Centred);
+
     if (!m_axisLocked) {
         // First press only squares the view up. Without this the plain front
         // view could never be reached, since every press would turn away from it.
@@ -70,6 +214,12 @@ void Camera::setDistance(float d)
 
 void Camera::orbit(float dYawDeg, float dPitchDeg)
 {
+    // Free rotation is steered by rotateFree().
+    if (m_rotationMode == Free)
+        return;
+
+    const QQuaternion before = orientation();
+
     m_yawDeg += dYawDeg;
     // Keep yaw bounded so it cannot drift into float ranges where the sine
     // loses precision after a few thousand drags.
@@ -77,6 +227,8 @@ void Camera::orbit(float dYawDeg, float dPitchDeg)
     if (m_yawDeg < -180.0f) m_yawDeg += 360.0f;
 
     m_pitchDeg = qBound(-kMaxPitch, m_pitchDeg + dPitchDeg, kMaxPitch);
+
+    keepPivotFixed(before);
 }
 
 void Camera::zoomBy(float factor)
@@ -96,6 +248,12 @@ QVector3D Camera::eye() const
     // the eye never moves in a locked view.
     if (m_axisLocked)
         return m_target + QVector3D(0.0f, -1.0f, 0.0f) * m_distance;
+
+    // Free rotation has no yaw and pitch; the attitude is primary.
+    if (m_rotationMode == Free) {
+        return m_target + m_orientation.conjugated().rotatedVector(
+                              QVector3D(0.0f, 0.0f, m_distance));
+    }
 
     const float yaw = qDegreesToRadians(m_yawDeg);
     const float pitch = qDegreesToRadians(m_pitchDeg);
@@ -125,6 +283,11 @@ void Camera::pan(float dxPixels, float dyPixels, float viewportHeightPixels)
         const QQuaternion inv = m_axisRotation.conjugated();
         right = inv.rotatedVector(QVector3D(1.0f, 0.0f, 0.0f));
         up = inv.rotatedVector(QVector3D(0.0f, 0.0f, 1.0f));
+    } else if (m_rotationMode == Free) {
+        // The camera's own axes, which after a roll are not the world's.
+        const QQuaternion inv = m_orientation.conjugated();
+        right = inv.rotatedVector(QVector3D(1.0f, 0.0f, 0.0f));
+        up = inv.rotatedVector(QVector3D(0.0f, 1.0f, 0.0f));
     } else {
         right = QVector3D::crossProduct(forward, kUp);
         if (right.lengthSquared() < 1e-12f)
@@ -236,6 +399,16 @@ float Camera::farPlane() const
 QMatrix4x4 Camera::viewMatrix() const
 {
     QMatrix4x4 m;
+
+    if (m_rotationMode == Free && !m_axisLocked) {
+        // Built directly: lookAt() cannot express roll, since it always takes
+        // its up vector from the world.
+        m.translate(0.0f, 0.0f, -m_distance);
+        m.rotate(m_orientation);
+        m.translate(-m_target);
+        return m;
+    }
+
     m.lookAt(eye(), m_target, kUp);
     if (m_axisLocked) {
         // Turn the world about the model's own centre, so a quarter turn never

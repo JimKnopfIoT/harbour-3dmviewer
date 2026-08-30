@@ -23,9 +23,9 @@
   ZIP, WITHOUT A ZIP LIBRARY
   --------------------------
   Only two things are needed from the archive: find one entry by name, and
-  inflate it. Both are a few dozen lines against zlib, which openNURBS already
-  brings. Pulling in a ZIP library for that would add a dependency to save
-  nothing.
+  inflate it. Both are a few dozen lines against the system zlib, which every
+  Sailfish device has. Pulling in a ZIP library for that would add a
+  dependency to save nothing.
 */
 #ifndef THREEMFREADER_H
 #define THREEMFREADER_H

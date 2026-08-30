@@ -1,7 +1,7 @@
 # Neutral packaging metadata — no personal identifiers (see CLAUDE.md anonymity rules).
 Name:       harbour-3dmviewer
 Summary:    Viewer for CAD models and sliced G-code
-Version:    0.1.2
+Version:    0.1.3
 Release:    1
 # ANONYMITY: neutral build host so built RPMs carry no real hostname/domain.
 # Without this, the RPM BUILDHOST tag leaks the build machine's name and LAN
@@ -18,14 +18,19 @@ Requires:   sailfishsilica-qt5
 # page that fails to load and the app looks broken. The name was verified on the
 # device with `rpm -qf /usr/lib64/qt5/qml/Sailfish/Pickers/FilePickerPage.qml`.
 Requires:   sailfish-components-pickers-qt5
-# openNURBS is compiled in statically and brings its own zlib and uuid code, so
-# reading .3dm adds no runtime dependency at all.
+# openNURBS is compiled into libharbour-3dmviewer-rhino.so, which this package
+# ships in a private directory under the library path and the application
+# dlopens the first time a .3dm is opened. It brings its own zlib and uuid code, so reading
+# .3dm adds no external runtime dependency; and because it is loaded on demand,
+# a user who never opens a Rhino file never loads it at all.
 BuildRequires: pkgconfig(sailfishapp)
 BuildRequires: pkgconfig(Qt5Core)
 BuildRequires: pkgconfig(Qt5Qml)
 BuildRequires: pkgconfig(Qt5Quick)
 BuildRequires: pkgconfig(Qt5Gui)
 BuildRequires: pkgconfig(Qt5Sensors)
+# The 3MF and bgcode readers inflate with the system zlib.
+BuildRequires: pkgconfig(zlib)
 BuildRequires: desktop-file-utils
 
 # The accelerometer backend is a runtime plugin that nothing links against, so
@@ -49,9 +54,10 @@ cylinders are tessellated on the device; other surface types are reported
 rather than drawn. Whatever cannot be shown is said out loud.
 
 Not affiliated with or endorsed by Robert McNeel & Associates. "Rhinoceros" and
-the Rhino logo are their trademarks. Includes the openNURBS toolkit (zlib
-license), which reads the Rhino format; the other readers are written for this
-program. Not affiliated with or endorsed by Prusa Research.
+the Rhino logo are their trademarks. Includes McNeel's openNURBS toolkit, which
+reads the Rhino format and is redistributed under the terms McNeel publish for
+it; the other readers are written for this program. Not affiliated with or
+endorsed by Prusa Research.
 
 %prep
 %setup -q
@@ -64,6 +70,13 @@ program. Not affiliated with or endorsed by Prusa Research.
 %install
 %qmake5_install
 
+# rpmbuild's strip pass takes the executable and leaves this one alone — it
+# only walks the standard binary directories, and this object sits in a private
+# subdirectory of them. Unstripped it is 67 MB of debug information, which
+# would be six times the rest of the package put together. So strip it here,
+# where it is one visible line rather than a surprise in the package size.
+strip --strip-unneeded %{buildroot}%{_libdir}/%{name}/lib%{name}-rhino.so
+
 desktop-file-install --delete-original \
     --dir %{buildroot}%{_datadir}/applications \
     %{buildroot}%{_datadir}/applications/*.desktop
@@ -71,11 +84,36 @@ desktop-file-install --delete-original \
 %files
 %defattr(-,root,root,-)
 %{_bindir}/%{name}
+# The Rhino reader, loaded on demand. Private to this application: nothing else
+# may link or dlopen it, which is why it is here and not in %{_libdir} proper.
+%dir %{_libdir}/%{name}
+%{_libdir}/%{name}/lib%{name}-rhino.so
 %{_datadir}/%{name}
 %{_datadir}/applications/%{name}.desktop
 %{_datadir}/icons/hicolor/*/apps/%{name}.png
 
 %changelog
+* Sun Aug 30 2026 harbour-3dmviewer contributors 0.1.3-1
+- Fix the startup crash on devices with a newer Android base (reproduced on a
+  Jolla J2). openNURBS present in the executable image killed the EGL setup
+  before the first frame; the Rhino reader now lives in a shared object loaded
+  only when a .3dm is opened, which is measurably safe and means the other four
+  formats never pay for it. The 0.1.2 symbol-export fix was a real defect but
+  not this one.
+- Fix an empty screen on Mali GPUs. A full-screen multisampled render target is
+  allocated lazily there, so it reported itself complete and then failed every
+  draw with GL_OUT_OF_MEMORY. Multisampling now steps down when the driver
+  refuses it, the affected buffers are uploaded again, and the result is
+  remembered so the next start is clean.
+- New: one button in the viewer's toolbar cycles how a drag turns the model —
+  about the screen centre, about a point tapped on the model, or freely with a
+  two-finger roll. Pressing it once more restores the opening view.
+- Keep the header strip and the two simulation pages' hints clear of a camera
+  cutout.
+- The 3MF and bgcode readers use the system zlib instead of the copy that came
+  with openNURBS.
+- Drop -mtune=cortex-a53: it named the development phone's core.
+
 * Tue Aug 11 2026 harbour-3dmviewer contributors 0.1.2-1
 - Link with --exclude-libs,ALL. sailfishapp's -rdynamic was exporting all
   22725 symbols that the static openNURBS archive contributed into the

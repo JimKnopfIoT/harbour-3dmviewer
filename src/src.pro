@@ -6,7 +6,9 @@
 # in this tree do. Do NOT add `CONFIG += sailfishapp` here expecting the icon and
 # QML installs to appear on their own — they will not.
 
-TARGET = harbour-3dmviewer
+include(../common.pri)
+
+TARGET = $$APP_NAME
 
 # The rpm build passes these (%qmake5 VERSION=%{version}); the fallbacks are for
 # a standalone/IDE build so the About page never shows an empty version.
@@ -17,38 +19,45 @@ isEmpty(RELEASE): RELEASE = 1
 # the phone tips the world the fallen model lies in.
 QT += quick qml gui sensors
 CONFIG += c++17 link_pkgconfig
-PKGCONFIG += sailfishapp
+# zlib for the 3MF and bgcode readers. The system one; see io/bgcodereader.cpp.
+PKGCONFIG += sailfishapp zlib
 
-# Same ARM64 tuning the other apps in this tree use (Xperia 10 III).
-QMAKE_CXXFLAGS_RELEASE += -O2 -march=armv8-a -mtune=cortex-a53
+# -march=armv8-a is the baseline every Sailfish aarch64 device meets. No -mtune:
+# it used to name the development phone's core, which the fleet outgrew.
+QMAKE_CXXFLAGS_RELEASE += -O2 -march=armv8-a
 
-# --- openNURBS static library ----------------------------------------------
-INCLUDEPATH += $$PWD/../lib/opennurbs
-LIBS += -L$$OUT_PWD/../lib -lopennurbs
+# --- the Rhino reader is not linked here ------------------------------------
+# openNURBS lives in src/rhino, dlopened on the first .3dm. It must not go back
+# on this link line: in the image at process start it kills EGL startup on newer
+# hybris devices (src/rhino/rhinoplugin.cpp).
+DEFINES += RHINO_PLUGIN_FILE=\\\"$$RHINO_PLUGIN_FILE\\\"
 
-# sailfishapp.pc puts -rdynamic on the link line (the mdeclarativecache booster
-# wants it). That exports EVERY symbol pulled out of libopennurbs.a into our
-# .dynsym — 22k of them — and the executable sits at the front of the global
-# lookup scope, so those definitions preempt the real ones for every library
-# loaded afterwards, hybris-loaded GPU blobs included.
+# dlopen/dlsym for that plugin. glibc 2.34 folded libdl into libc, but the
+# 5.0.0.62 target is older than that and still needs it named.
+LIBS += -ldl
+
+# sailfishapp.pc puts -rdynamic on the link line and that exports every symbol
+# a static archive contributes, from an executable that sits at the front of the
+# global lookup scope. When openNURBS was linked here it put 22725 symbols
+# there, including an unprefixed 1.2.3-era zlib that shadowed the system one —
+# that cost a release. No archive is linked here now, so this is a guard; where
+# archives really are linked, src/rhino, the same flag does real work.
 #
-# They do collide. openNURBS' bundled zlib is 1.2.3-era: its Z_PREFIX list
-# renames the ~30 names it knew about and nothing else, so inflateGetHeader,
-# inflatePrime, deflateSetHeader, deflateTune, crc32_combine, adler32_combine
-# and the internals (inflate_fast, inflate_table, _tr_*, _dist_code, z_errmsg)
-# all ship unprefixed and shadow the system libz. android_uuid/ likewise
-# shadows libuuid.so.1 with uuid_generate/uuid_pack/uuid_unpack.
-#
-# --exclude-libs makes every symbol from the static archives local without
-# touching -rdynamic, so our own symbols stay exported and the booster is
-# unaffected. Nothing dlopens openNURBS, so nothing needs it visible.
+#   readelf --dyn-syms -W src/harbour-3dmviewer | awk '$7!="UND"' | wc -l
+#   -> 19, not 22000.
 QMAKE_LFLAGS += -Wl,--exclude-libs,ALL
+
+# Objects do not depend on the Makefile, so a changed flag otherwise leaves the
+# previous binary in the package. This forces a relink on a changed LINK flag;
+# compile flags still need build-app.sh to drop the objects.
+PRE_TARGETDEPS += $$OUT_PWD/Makefile
 
 # --- Sources ----------------------------------------------------------------
 INCLUDEPATH += $$PWD
 
 HEADERS += \
     model/scene.h \
+    io/rhinoplugin.h \
     model/layermodel.h \
     io/bgcodecodecs.h \
     io/bgcodereader.h \
@@ -92,6 +101,9 @@ CONFIG += sailfishapp_i18n
 TRANSLATIONS += ../translations/harbour-3dmviewer-de.ts
 lupdate_only {
     SOURCES += ../qml/*.qml ../qml/pages/*.qml ../qml/cover/*.qml ../qml/components/*.qml
+    # The plugin has no translator of its own — its tr() calls resolve against
+    # the one libsailfishapp installs here — so its strings belong in this .ts.
+    SOURCES += rhino/rhinoplugin.cpp
 }
 
 # --- Installs ---------------------------------------------------------------

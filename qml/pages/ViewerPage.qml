@@ -12,6 +12,15 @@
   Pressing the axis already in use turns the view a further quarter turn about
   it. 3D is the only mode that orbits freely.
 
+  AND THREE WAYS OF TURNING
+  -------------------------
+  Within 3D, one button cycles Centre / Point / Free — about the screen centre,
+  about a tapped spot on the model, or free with a two-finger roll. Pressing
+  once more returns to Centre, which is a full reset: framed and centred at the
+  opening perspective, roll dropped, turning point forgotten. That return is why
+  it is a cycle and not a switch, and why free rotation is safe to offer at all;
+  camera.h argues against it and is still right about the default.
+
   WHY THE PULLEY STILL NEEDS A STRIP OF ITS OWN
   ---------------------------------------------
   Silica's pull-down menu is opened by dragging down from the top, the same
@@ -30,6 +39,20 @@ import "../components"
 Page {
     id: page
     allowedOrientations: Orientation.All
+
+    // CAMERA CUTOUT
+    // Silica keeps its own PageHeader clear of a camera cutout by itself
+    // (`_minimumTopMargin` in PageHeader.qml). The strip below is this page's
+    // own header, so it has to be told: on a phone with a wide cutout (Jolla
+    // J2) the notch edge cut straight through the file name. Portrait only,
+    // as Silica has it — in landscape the cutout is at the side and a top
+    // margin would be a gap for nothing. On a phone without one the rectangle
+    // is empty and this is zero, so it costs the other devices nothing.
+    //
+    // The picture underneath is not inset on purpose: it is a picture, and
+    // cropping it would cost more than the corner the notch hides.
+    readonly property real topInset: orientation === Orientation.Portrait
+                                     ? Screen.topCutout.height : 0
 
     // Swiping left leads to the drop page, and from there to the trampoline.
     // Attached once, on first activation: pushing it again on every visit would
@@ -87,7 +110,10 @@ Page {
         // ------------------------------------------------------- header ---
         Item {
             id: headerStrip
-            anchors { top: parent.top; left: parent.left; right: parent.right }
+            anchors {
+                top: parent.top; left: parent.left; right: parent.right
+                topMargin: page.topInset
+            }
             height: Theme.itemSizeLarge
 
             Column {
@@ -151,6 +177,58 @@ Page {
             }
         }
 
+        // ------------------------------------------------ turning point ---
+        // Chrome, not geometry: it keeps its size on screen at any zoom.
+        Item {
+            id: pivotMark
+            visible: modelView.pivotSet
+                     && modelView.rotationMode !== ModelView.RotateCentred
+                     && modelLoader.hasModel
+            x: modelView.pivotScreenPos.x - width / 2
+            y: modelView.pivotScreenPos.y - height / 2
+            width: Theme.itemSizeExtraSmall
+            height: width
+            z: 1
+
+            Rectangle {
+                anchors.centerIn: parent
+                width: parent.width * 0.5; height: width
+                radius: width / 2
+                color: "transparent"
+                border { width: 2; color: Theme.highlightColor }
+                opacity: 0.9
+            }
+            Rectangle {
+                anchors.centerIn: parent
+                width: parent.width; height: 2
+                color: Theme.highlightColor
+                opacity: 0.6
+            }
+            Rectangle {
+                anchors.centerIn: parent
+                width: 2; height: parent.height
+                color: Theme.highlightColor
+                opacity: 0.6
+            }
+        }
+
+        // Says what to do in the one state that needs the user to act before
+        // anything happens. It disappears the moment they have.
+        Label {
+            visible: modelView.rotationMode === ModelView.RotateAboutPivot
+                     && !modelView.pivotSet && modelLoader.hasModel
+            anchors {
+                horizontalCenter: parent.horizontalCenter
+                bottom: parent.bottom
+                bottomMargin: toolbar.height + Theme.paddingLarge
+            }
+            //: Shown after switching to "turn about a point": the user has to
+            //: choose that point before the state does anything.
+            text: qsTr("Tap the model to set the turning point")
+            font.pixelSize: Theme.fontSizeExtraSmall
+            color: Theme.highlightColor
+        }
+
         // ----------------------------------------------------- gestures ---
         PinchArea {
             anchors {
@@ -161,7 +239,8 @@ Page {
             enabled: modelLoader.hasModel
 
             property real lastScale: 1.0
-            onPinchStarted: lastScale = 1.0
+            property real lastRotation: 0.0
+            onPinchStarted: { lastScale = 1.0; lastRotation = 0.0 }
             onPinchUpdated: {
                 // Relative step, not absolute scale: absolute would snap the
                 // zoom back to the gesture's origin every time a finger is
@@ -169,6 +248,16 @@ Page {
                 var step = pinch.scale / lastScale
                 lastScale = pinch.scale
                 modelView.zoomBy(step)
+
+                // The twist, for the same reason relative. Only free rotation
+                // can roll — rollBy is a no-op in the other two states, so
+                // there is nothing to guard here and nothing that silently
+                // half-works either.
+                var turn = pinch.rotation - lastRotation
+                lastRotation = pinch.rotation
+                if (turn !== 0.0)
+                    modelView.rollBy(turn)
+
                 toolbar.poke()
             }
 
@@ -199,6 +288,14 @@ Page {
                     else
                         modelView.orbit(dx, dy)
                     toolbar.poke()
+                }
+                // Only in the pivot state. Elsewhere a single tap has never
+                // done anything, and a stray tap should not move a picture.
+                onClicked: {
+                    if (modelView.rotationMode === ModelView.RotateAboutPivot) {
+                        modelView.pickPivot(mouse.x, mouse.y)
+                        toolbar.reveal()
+                    }
                 }
                 onDoubleClicked: modelView.fitToView()
             }
@@ -281,6 +378,113 @@ Page {
         }
     }
 
+    // --- the hint that the bottom edge is worth touching --------------------
+    /*
+      The toolbar hides itself, and a control nobody knows about might as well
+      not exist — so the edge fogs while it is away.
+
+      A shader because every quantity is per-pixel: reach, density and hue all
+      vary along the edge. Sums of sines at frequencies that do not divide into
+      each other drive the three separately, so none of them beats together. All
+      temporal frequencies are whole multiples of the clocks, which run 0..2*pi,
+      so the loop closes without a jump.
+
+      Animated only while visible: it keeps the scene graph repainting, which is
+      a poor trade for a hint nobody needs once the bar is up.
+    */
+    Item {
+        id: edgeGlow
+        anchors { left: parent.left; right: parent.right; bottom: parent.bottom }
+        // Reach below is a fraction of this, so it raises everything at once.
+        height: Theme.itemSizeMedium
+        visible: modelLoader.hasModel && !toolbar.shown
+
+        // t is the slow drift of shape and colour; p is the gusting.
+        property real t: 0.0
+        property real p: 0.0
+        NumberAnimation on t {
+            running: edgeGlow.visible
+            from: 0.0; to: 2.0 * Math.PI
+            duration: 480000          // fog does not hurry
+            loops: Animation.Infinite
+        }
+        NumberAnimation on p {
+            running: edgeGlow.visible
+            from: 0.0; to: 2.0 * Math.PI
+            duration: 14000
+            loops: Animation.Infinite
+        }
+
+        ShaderEffect {
+            anchors.fill: parent
+            property real t: edgeGlow.t
+            property real p: edgeGlow.p
+            fragmentShader: "
+                varying highp vec2 qt_TexCoord0;
+                uniform lowp float qt_Opacity;
+                uniform highp float t;   // slow: shape and colour
+                uniform highp float p;   // fast: the gusts
+
+                highp float wob(highp float x, highp float f1, highp float f2,
+                                highp float f3, highp float p)
+                {
+                    return 0.5 + 0.28 * sin(x * f1 + t + p)
+                               + 0.14 * sin(x * f2 - t * 2.0 + p * 1.7)
+                               + 0.08 * sin(x * f3 + t * 3.0 - p * 0.6);
+                }
+
+                lowp vec3 hsv2rgb(highp float h, lowp float s, lowp float v)
+                {
+                    highp vec3 k = fract(vec3(h) + vec3(0.0, 0.6666667, 0.3333333));
+                    return v * mix(vec3(1.0), clamp(abs(k * 6.0 - 3.0) - 1.0, 0.0, 1.0), s);
+                }
+
+                void main()
+                {
+                    highp float x = qt_TexCoord0.x;
+                    highp float up = 1.0 - qt_TexCoord0.y;   // 0 at the screen edge
+
+                    // How high this gust reaches here; the second factor varies
+                    // it from one gust to the next.
+                    highp float reach = (0.12 + 0.42 * wob(x, 5.0, 11.0, 19.0, 0.0))
+                                      * (0.45 + 0.95 * (0.5 + 0.5 * sin(p + x * 2.1)));
+                    highp float d = clamp(1.0 - up / max(reach, 0.02), 0.0, 1.0);
+                    d = d * d;
+
+                    // Reaches zero in places, so the bottom edge has gaps in it
+                    // instead of being one unbroken coloured bar.
+                    // Slid along by the gust clock, so no two gusts look alike.
+                    d *= clamp(1.30 * wob(x + 0.30 * sin(p), 3.0, 7.0, 13.0, 2.1)
+                               - 0.32, 0.0, 1.0);
+
+                    // Clamped hard to zero, so there are stretches of seconds
+                    // with nothing; the slow t moves the threshold, so no two
+                    // quiet stretches are the same length.
+                    highp float breath = 0.5 + 0.5 * sin(p) + 0.22 * sin(p * 2.0 + 1.7);
+                    highp float gate = clamp(breath * (1.05 + 0.35 * sin(t)) - 0.50, 0.0, 1.0);
+
+                    // WHERE along the edge it comes out. Without this the gate is
+                    // purely temporal and every gust spans the whole width, always
+                    // in the same places.
+                    highp float centre = 0.5 + 0.42 * sin(p + 1.9) * cos(p * 2.0 + 0.7);
+                    highp float width  = 0.11 + 0.17 * (0.5 + 0.5 * sin(p * 3.0));
+                    highp float q = (x - centre) / width;
+                    gate *= exp(-q * q);
+
+                    highp float hue = fract(0.35 * x + 0.16 * t
+                                          + 0.30 * wob(x, 2.0, 6.0, 9.0, 4.2));
+
+                    // Saturation is what decides hint versus sign. Tuned against
+                    // the dimmer of the two test phones: the same numbers read
+                    // noticeably fainter on one panel than the other, and a hint
+                    // that only works on the brighter screen is none.
+                    lowp float a = d * gate * 0.46 * qt_Opacity;
+                    gl_FragColor = vec4(hsv2rgb(hue, 0.85, 1.0) * a, a);  // premultiplied
+                }
+            "
+        }
+    }
+
     // --- toolbar -----------------------------------------------------------
     // Hidden until swiped up from the bottom edge, and it slides away again
     // after three seconds of nothing happening. The model is the content; the
@@ -342,6 +546,20 @@ Page {
                 label: qsTr("3D")
                 active: modelView.axisLocked
                 onActivated: { modelView.setFreeView(); toolbar.reveal() }
+            }
+            // One button, three states, wrapping back to the first — the last
+            // press is the way out of a tumbled model.
+            ViewButton {
+                //: Toolbar. Centre: the model turns about the middle of the
+                //: screen. Point: about a spot the user taps on it. Free: any
+                //: attitude, two fingers roll it.
+                label: modelView.rotationMode === ModelView.RotateAboutPivot ? qsTr("Point")
+                     : modelView.rotationMode === ModelView.RotateFree       ? qsTr("Free")
+                                                                             : qsTr("Centre")
+                active: modelView.rotationMode !== ModelView.RotateCentred
+                enabled: !modelView.axisLocked
+                opacity: enabled ? 1.0 : 0.4
+                onActivated: { modelView.cycleRotationMode(); toolbar.reveal() }
             }
             ViewButton {
                 //: Toolbar: cycles solid / wireframe / see-through, as in Rhino

@@ -23,6 +23,14 @@ Page {
     // interaction would fight itself.
     allowedOrientations: Orientation.Portrait
 
+    // CAMERA CUTOUT
+    // The hint below is the only chrome on this page and it sits at the very
+    // top edge, where a wide cutout (Jolla J2) cuts through it. No orientation
+    // condition, unlike ViewerPage: this page is locked to portrait, so the
+    // cutout is at its top whatever the phone is doing. Zero on a phone
+    // without one. The model behind it is deliberately not inset.
+    readonly property real topInset: Screen.topCutout.height
+
     onStatusChanged: {
         if (status === PageStatus.Active) {
             dropView.armAutoDrop()
@@ -53,7 +61,7 @@ Page {
         anchors {
             top: parent.top
             horizontalCenter: parent.horizontalCenter
-            topMargin: Theme.paddingLarge
+            topMargin: Theme.paddingLarge + page.topInset
         }
         text: dropView.tiltAvailable ? qsTr("Tilt the phone")
                                      : qsTr("No accelerometer — it can only fall straight down")

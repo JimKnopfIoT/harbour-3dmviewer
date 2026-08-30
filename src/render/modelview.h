@@ -59,6 +59,13 @@ class ModelView : public QQuickFramebufferObject
     Q_PROPERTY(bool axisLocked READ axisLocked NOTIFY viewAxisChanged)
     Q_PROPERTY(DisplayMode displayMode READ displayMode WRITE setDisplayMode NOTIFY displayModeChanged)
 
+    // How a drag turns the model; see Camera::RotationMode. pivotSet and
+    // pivotScreenPos let the UI mark where the turn happens — without a mark,
+    // tapping a point gives no feedback until the next drag.
+    Q_PROPERTY(RotationMode rotationMode READ rotationMode NOTIFY rotationModeChanged)
+    Q_PROPERTY(bool pivotSet READ pivotSet NOTIFY cameraChanged)
+    Q_PROPERTY(QPointF pivotScreenPos READ pivotScreenPos NOTIFY cameraChanged)
+
     /*
       Print slices, for sliced formats only (.bgcode). sliceCount is 0 for a
       CAD model, which is what the UI tests before it shows the slice slider at
@@ -114,6 +121,31 @@ public:
     void setRenderWarning(const QString &w);   // called from the render thread's sync
 
     // --- interaction, all in device-independent screen pixels ---------------
+    // Mirrors Camera::RotationMode; declared here because QML needs the enum on
+    // the type that carries the property.
+    enum RotationMode {
+        RotateCentred = 0,   // turntable about the centre of the screen
+        RotateAboutPivot,    // turntable about a tapped point on the model
+        RotateFree           // arcball: any attitude, two-finger twist rolls
+    };
+    Q_ENUM(RotationMode)
+
+    RotationMode rotationMode() const;
+    bool pivotSet() const;
+    // In this item's pixels; meaningless while pivotSet is false.
+    QPointF pivotScreenPos() const;
+
+    // Wraps back to RotateCentred, which is also the reset.
+    Q_INVOKABLE void cycleRotationMode();
+
+    // Makes the point of the model under (x, y) the centre of rotation. A tap
+    // that misses falls back to the plane through the current centre. Returns
+    // whether it actually hit.
+    Q_INVOKABLE bool pickPivot(qreal x, qreal y);
+
+    // A two-finger twist, in degrees. Only free rotation can roll.
+    Q_INVOKABLE void rollBy(qreal degrees);
+
     Q_INVOKABLE void orbit(qreal dxPixels, qreal dyPixels);
     Q_INVOKABLE void panBy(qreal dxPixels, qreal dyPixels);
     Q_INVOKABLE void zoomBy(qreal factor);
@@ -171,6 +203,9 @@ signals:
     void displayModeChanged();
     void settingsChanged();
     void sliceRangeChanged();
+    void rotationModeChanged();
+    // Whenever the camera moved, so a QML pivot marker keeps up.
+    void cameraChanged();
 
 private slots:
     void onSceneChanged();

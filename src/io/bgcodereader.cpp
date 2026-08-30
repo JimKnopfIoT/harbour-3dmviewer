@@ -13,9 +13,10 @@
 
 #include "io/bgcodecodecs.h"
 
-// zlib comes with openNURBS and is already linked, so the two deflate-compressed
-// metadata blocks cost nothing extra to read.
-#include "zlib/zlib.h"
+// The system zlib. This used to be openNURBS' bundled 1.2.3-era copy, which
+// was only on the include path by accident of the build — and whose unprefixed
+// symbols were what shadowed the real one and cost a release.
+#include <zlib.h>
 
 namespace {
 

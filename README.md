@@ -9,9 +9,9 @@ It is a **viewer and nothing else**: there is no editing and no save path
 anywhere in the program, so it can never write over the file you opened.
 Everything runs on the device — no network, no telemetry, no cloud component.
 
-> Developed and tested on a **Sony Xperia 10 III** (`pdx213`) running Sailfish OS
-> 5.1.0.11. Much of it should work on other Sailfish OS devices too, but that is
-> the only one it has actually been verified on.
+> Developed on a **Sony Xperia 10 III** (`pdx213`, Sailfish OS 5.1.0.11) and
+> also verified on a **Jolla J2** (Sailfish OS 5.2). Much of it should work on
+> other Sailfish OS devices too, but those are the two it has been run on.
 
 <p align="center">
   <img src="screenshots/demo.gif" width="260" alt="Turning a model, switching between solid, wireframe and see-through, opening the layer list, and dropping the model into the deep room">
@@ -41,6 +41,9 @@ Everything runs on the device — no network, no telemetry, no cloud component.
 - **Turn it around** — orbit with one finger, pinch to zoom, double tap to fit.
 - **Locked views** — X / Y / Z square-on, each further tap a quarter turn, plus
   a free 3D view.
+- **Three ways of turning** — one button cycles between turning about the centre
+  of the screen, about a point you tap on the model, and freely in any
+  direction with a two-finger roll. A further press restores the opening view.
 - **Three display modes** — solid, wireframe and see-through.
 - **A switch per layer** — Rhino layers, STEP solids, 3MF objects, or the
   extrusion types of a sliced file, starting from the visibility stored in the
@@ -120,9 +123,11 @@ and Rhino geometry is only ever the render mesh the file happens to carry.
 Whatever cannot be drawn is reported rather than quietly dropped — but do not
 take a dimension off the screen and cut metal to it.
 
-**Verified on one device only** — a Sony Xperia 10 III on Sailfish OS 5.1.0.11.
-It has been reported to crash on a different device, and that report is not
-resolved. If it happens to you, please open an issue with your device model and
+**Verified on two devices** — a Sony Xperia 10 III on Sailfish OS 5.1.0.11 and
+a Jolla J2 on 5.2. The startup crash reported against earlier versions is fixed
+in 0.1.3; it was openNURBS in the executable image killing the EGL setup before
+the first frame, so the Rhino reader is now loaded only when a `.3dm` is opened.
+If something still goes wrong, please open an issue with your device model and
 the output of `harbour-3dmviewer` launched from the Terminal **on the phone**
 (over ssh there is no Wayland session and the error you get is a different one).
 

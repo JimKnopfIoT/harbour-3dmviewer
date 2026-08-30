@@ -14,7 +14,8 @@
 #include <QXmlStreamReader>
 #include <QtGlobal>
 
-#include "zlib/zlib.h"
+// The system zlib; see the note in bgcodereader.cpp.
+#include <zlib.h>
 
 namespace {
 

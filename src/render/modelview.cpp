@@ -12,6 +12,11 @@
 #include <QOpenGLFramebufferObjectFormat>
 #include <QOpenGLFunctions>
 #include <QOpenGLShaderProgram>
+#include <QPointF>
+#include <QVector4D>
+#include <QDir>
+#include <QSettings>
+#include <QStandardPaths>
 #include <QHash>
 #include <QVector>
 #include <QtMath>
@@ -266,10 +271,10 @@ public:
         : m_program(nullptr)
         , m_sceneGeneration(0)
         , m_uploaded(false)
-        , m_roomVisible(false)
         , m_uintIndicesSupported(true)
         , m_aspect(1.0f)
     {
+        ++s_liveRenderers;
         initializeOpenGLFunctions();
 
         // GLES2 only guarantees 16-bit indices. Every GPU we care about has the
@@ -287,21 +292,31 @@ public:
 
     ~ModelViewRenderer() override
     {
+        --s_liveRenderers;
         releaseBatches();
         delete m_program;
     }
 
     QOpenGLFramebufferObject *createFramebufferObject(const QSize &size) override
     {
+        m_aspect = size.height() > 0 ? float(size.width()) / float(size.height()) : 1.0f;
+
+        /*
+          Multisampling at whatever level this GPU turned out to afford. It is
+          worth asking for — aliasing on CAD edges is the most visible quality
+          difference on a phone — but it cannot be checked here: on a Mali-G610
+          the allocation is lazy, so construction succeeds, the framebuffer
+          reports itself complete, and every draw into it then fails with
+          GL_OUT_OF_MEMORY. The level is decided in render() by whether drawing
+          worked, and remembered in s_maxSamples for the other views.
+        */
+        loadRememberedSampleCount();
+
         QOpenGLFramebufferObjectFormat fmt;
         // Depth is not optional — without it the model draws in file order and
         // the back of the part paints over the front.
         fmt.setAttachment(QOpenGLFramebufferObject::Depth);
-        // 4x MSAA. On a phone screen the aliasing on CAD edges is the single
-        // most visible quality difference, and Qt silently drops back to no
-        // multisampling if the driver cannot do it.
-        fmt.setSamples(4);
-        m_aspect = size.height() > 0 ? float(size.width()) / float(size.height()) : 1.0f;
+        fmt.setSamples(s_maxSamples);
         return new QOpenGLFramebufferObject(size, fmt);
     }
 
@@ -364,6 +379,16 @@ public:
             return;
         if (!m_uploaded)
             uploadScene();
+
+        if (!m_diagnosed) {
+            m_diagnosed = true;
+            dumpRenderEnvironment();
+        }
+
+        // Whatever the previous frame ran into, including the driver finally
+        // admitting it could not afford the target it happily handed us.
+        if (stepDownIfOutOfMemory())
+            return;
 
         glClearColor(float(m_background.redF()), float(m_background.greenF()),
                      float(m_background.blueF()), 1.0f);
@@ -470,6 +495,7 @@ public:
                 qintptr(first) * b->indexSizeBytes());
             glDrawElements(useEdges ? GL_LINES : b->drawMode,
                            count, b->indexType, offset);
+            reportFirstGlError("glDrawElements", i, count);
 
             if (asLines)
                 m_program->setUniformValue("uUnlit", wireframe ? 1.0f : 0.0f);
@@ -609,6 +635,159 @@ public:
     }
 
 private:
+    /*
+      What the driver is, and what it made of our buffers. "The model does not
+      appear" is the least diagnosable bug a renderer has — no error, no crash,
+      no log — and the phone that misbehaves is the one that cannot be attached
+      to. Unconditional, because an app started from its icon has no environment
+      anybody can set: the shared part once per process, one line per view.
+    */
+    void dumpRenderEnvironment()
+    {
+        if (!s_describedGpu) {
+            s_describedGpu = true;
+            const char *vendor = reinterpret_cast<const char *>(glGetString(GL_VENDOR));
+            const char *renderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
+            const char *version = reinterpret_cast<const char *>(glGetString(GL_VERSION));
+            QOpenGLContext *ctx = QOpenGLContext::currentContext();
+            qWarning("GLDIAG %s / %s / %s", vendor ? vendor : "?",
+                     renderer ? renderer : "?", version ? version : "?");
+            if (ctx) {
+                qWarning("GLDIAG es=%d %d.%d depth=%d uintIndices=%d",
+                         int(ctx->isOpenGLES()), ctx->format().majorVersion(),
+                         ctx->format().minorVersion(), ctx->format().depthBufferSize(),
+                         int(m_uintIndicesSupported));
+            }
+        }
+
+        int totalIndices = 0;
+        int visibleBatches = 0;
+        for (int i = 0; i < m_batches.size(); ++i) {
+            const GpuBatch *b = m_batches.at(i);
+            totalIndices += b->indexCount;
+            if (b->visible && b->indexCount > 0)
+                ++visibleBatches;
+        }
+
+        // An incomplete framebuffer draws nothing and says nothing, so its
+        // status belongs in the same line as what we tried to draw into it.
+        QOpenGLFramebufferObject *fbo = framebufferObject();
+        qWarning("GLDIAG view fbo=%u %dx%d samples=%d status=0x%x linked=%d"
+                 " batches=%d visible=%d indices=%d uploadedKiB=%d liveViews=%d",
+                 fbo ? fbo->handle() : 0u,
+                 fbo ? fbo->size().width() : 0, fbo ? fbo->size().height() : 0,
+                 fbo ? fbo->format().samples() : -1,
+                 unsigned(glCheckFramebufferStatus(GL_FRAMEBUFFER)),
+                 int(m_program && m_program->isLinked()),
+                 m_batches.size(), visibleBatches, totalIndices,
+                 int(m_uploadedBytes / 1024), s_liveRenderers);
+
+        for (GLenum e = glGetError(); e != GL_NO_ERROR; e = glGetError())
+            qWarning("GLDIAG pre-draw glGetError=0x%x", unsigned(e));
+    }
+
+    /*
+      Gives up multisampling a rung at a time on GL_OUT_OF_MEMORY. A driver may
+      defer the allocation behind a framebuffer object — Mali does — so the only
+      honest question is whether the last frame worked, not what the GPU claims
+      up front. True means the target is being rebuilt: abandon this frame.
+    */
+    bool stepDownIfOutOfMemory()
+    {
+        bool oom = false;
+        for (GLenum e = glGetError(); e != GL_NO_ERROR; e = glGetError()) {
+            if (e == GL_OUT_OF_MEMORY)
+                oom = true;
+        }
+        if (!oom)
+            return false;
+
+        /*
+          Re-upload as well. A glBufferData issued while the context is out of
+          memory does not fail loudly: it leaves an empty buffer that stays
+          empty for the life of the view, however healthy the context becomes
+          afterwards. That is what left two of the three pages blank and the
+          third correct.
+        */
+        releaseBatches();
+        m_uploaded = false;
+
+        if (s_maxSamples <= 0) {
+            // Nothing left to give up. One re-upload, then say so plainly: the
+            // render target is not what is exhausting this GPU.
+            if (!m_oomRetried) {
+                m_oomRetried = true;
+                qWarning("GLDIAG GL_OUT_OF_MEMORY with multisampling already off"
+                         " — discarding this view's buffers and uploading again");
+                update();
+                return true;
+            }
+            if (!m_oomReported) {
+                m_oomReported = true;
+                qWarning("GLDIAG GL_OUT_OF_MEMORY persists with multisampling off"
+                         " and after a re-upload — the render target is not what"
+                         " is exhausting this GPU");
+            }
+            return false;
+        }
+
+        const int was = s_maxSamples;
+        s_maxSamples = (s_maxSamples > 2) ? 2 : 0;
+        qWarning("GLDIAG GL_OUT_OF_MEMORY drawing into a %d-sample target;"
+                 " rebuilding every view with %d", was, s_maxSamples);
+        rememberSampleCount(s_maxSamples);
+
+        invalidateFramebufferObject();
+        update();
+        return true;
+    }
+
+    /*
+      What this GPU turned out to afford, kept across launches — otherwise the
+      discovery is made again on every start, and the views that allocate before
+      the step-down come up blank each time. Same settings.conf PhysicsSettings
+      uses.
+    */
+    static QString settingsFile()
+    {
+        const QString dir =
+            QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation);
+        QDir().mkpath(dir);
+        return dir + QStringLiteral("/settings.conf");
+    }
+
+    static void loadRememberedSampleCount()
+    {
+        if (s_samplesLoaded)
+            return;
+        s_samplesLoaded = true;
+        QSettings st(settingsFile(), QSettings::IniFormat);
+        const int stored = st.value(QStringLiteral("gl/maxSamples"), 4).toInt();
+        // Only ever believe a value we could have written ourselves.
+        if (stored == 0 || stored == 2 || stored == 4)
+            s_maxSamples = stored;
+    }
+
+    static void rememberSampleCount(int samples)
+    {
+        QSettings st(settingsFile(), QSettings::IniFormat);
+        st.setValue(QStringLiteral("gl/maxSamples"), samples);
+    }
+
+    // Reports at most one draw-call error per renderer: a broken draw usually
+    // repeats every frame, and a log line per frame per batch would bury it.
+    void reportFirstGlError(const char *where, int batch, int count)
+    {
+        if (m_drawErrorReported)
+            return;
+        const GLenum e = glGetError();
+        if (e == GL_NO_ERROR)
+            return;
+        m_drawErrorReported = true;
+        qWarning("GLDIAG %s failed: batch=%d count=%d glGetError=0x%x",
+                 where, batch, count, unsigned(e));
+    }
+
     bool buildProgram()
     {
         m_program = new QOpenGLShaderProgram;
@@ -626,6 +805,7 @@ private:
 
     void releaseBatches()
     {
+        m_uploadedBytes = 0;
         for (int i = 0; i < m_batches.size(); ++i) {
             m_batches.at(i)->vbo.destroy();
             m_batches.at(i)->ibo.destroy();
@@ -639,6 +819,7 @@ private:
     {
         releaseBatches();
         m_uploaded = true;
+        m_uploadedBytes = 0;
 
         if (m_scene.isNull())
             return;
@@ -662,6 +843,7 @@ private:
             b->vbo.bind();
             b->vbo.setUsagePattern(QOpenGLBuffer::StaticDraw);
             b->vbo.allocate(L.vertices.constData(), L.vertices.size() * int(sizeof(float)));
+            m_uploadedBytes += L.vertices.size() * qint64(sizeof(float));
             b->vbo.release();
 
             b->ibo.create();
@@ -735,6 +917,19 @@ private:
     quint64 m_sceneGeneration;
     bool m_uploaded;
     bool m_uintIndicesSupported;
+    bool m_diagnosed = false;
+    bool m_drawErrorReported = false;
+    bool m_oomReported = false;
+    bool m_oomRetried = false;
+    qint64 m_uploadedBytes = 0;
+
+    // Shared: what one view learns about this GPU is true for the others.
+    static int s_maxSamples;
+    static bool s_samplesLoaded;
+    // Normally three: all three pages sit in the page stack, each with its own
+    // full-screen target and its own copy of the geometry.
+    static int s_liveRenderers;
+    static bool s_describedGpu;
 
     QMatrix4x4 m_view;
     QMatrix4x4 m_proj;
@@ -753,6 +948,12 @@ private:
     QVector3D m_frontHalf;
     QVector3D m_backHalf;
 };
+
+// Starts optimistic; only stepDownIfOutOfMemory() ever lowers it.
+int ModelViewRenderer::s_maxSamples = 4;
+bool ModelViewRenderer::s_samplesLoaded = false;
+int ModelViewRenderer::s_liveRenderers = 0;
+bool ModelViewRenderer::s_describedGpu = false;
 
 // ------------------------------------------------------------------- item ---
 
@@ -1255,11 +1456,166 @@ void ModelView::orbit(qreal dxPixels, qreal dyPixels)
     if (m_sim.isActive())
         return;
 
-    // Dragging up looks down on the model, which is what a turntable does when
-    // you push the far side away — hence the sign on the pitch.
-    m_camera.orbit(float(-dxPixels) * kOrbitDegPerPixel,
-                   float(dyPixels) * kOrbitDegPerPixel);
+    if (m_camera.rotationMode() == Camera::Free) {
+        // Same degrees per pixel as the turntable, so the mode switch does not
+        // also change how far a drag turns the model.
+        m_camera.rotateFree(float(-dxPixels) * kOrbitDegPerPixel,
+                            float(-dyPixels) * kOrbitDegPerPixel);
+    } else {
+        // Dragging up looks down on the model, which is what a turntable does
+        // when you push the far side away — hence the sign on the pitch.
+        m_camera.orbit(float(-dxPixels) * kOrbitDegPerPixel,
+                       float(dyPixels) * kOrbitDegPerPixel);
+    }
+    emit cameraChanged();
     update();
+}
+
+ModelView::RotationMode ModelView::rotationMode() const
+{
+    return RotationMode(int(m_camera.rotationMode()));
+}
+
+bool ModelView::pivotSet() const
+{
+    return m_camera.hasPivot();
+}
+
+QPointF ModelView::pivotScreenPos() const
+{
+    if (!m_camera.hasPivot() || width() <= 0 || height() <= 0)
+        return QPointF(-1.0, -1.0);
+
+    const QMatrix4x4 mvp =
+        m_camera.projectionMatrix(float(width() / height())) * m_camera.viewMatrix();
+    const QVector4D clip = mvp * QVector4D(m_camera.pivot(), 1.0f);
+    if (clip.w() <= 0.0f)
+        return QPointF(-1.0, -1.0);   // behind the camera
+
+    // Normalised device coordinates have y up; item pixels have y down.
+    const float ndcX = clip.x() / clip.w();
+    const float ndcY = clip.y() / clip.w();
+    return QPointF((ndcX * 0.5 + 0.5) * width(),
+                   (1.0 - (ndcY * 0.5 + 0.5)) * height());
+}
+
+void ModelView::cycleRotationMode()
+{
+    if (m_sim.isActive())
+        return;
+
+    const int next = (int(m_camera.rotationMode()) + 1) % 3;
+    m_camera.setRotationMode(Camera::RotationMode(next));
+
+    // Centre is a full reset, not just "stop using a pivot": by the time anyone
+    // reaches for it the model is usually tumbled, pinned and zoomed in on.
+    // Reusing setStandardView() keeps "the state a model opens in" one
+    // definition rather than two.
+    if (next == RotateCentred)
+        setStandardView(QStringLiteral("perspective"));
+
+    // Stepping into AboutPivot has no pivot yet — the user taps next — so until
+    // they do it behaves exactly as Centred did and nothing jumps.
+    emit rotationModeChanged();
+    emit cameraChanged();
+    update();
+}
+
+void ModelView::rollBy(qreal degrees)
+{
+    if (m_sim.isActive())
+        return;
+    m_camera.roll(float(degrees));
+    emit cameraChanged();
+    update();
+}
+
+namespace {
+
+// Möller–Trumbore. Ray parameter of the hit, negative on a miss — which is also
+// what a degenerate triangle gives, and the right answer for one.
+float rayTriangle(const QVector3D &origin, const QVector3D &dir,
+                  const QVector3D &a, const QVector3D &b, const QVector3D &c)
+{
+    const QVector3D ab = b - a;
+    const QVector3D ac = c - a;
+    const QVector3D pv = QVector3D::crossProduct(dir, ac);
+    const float det = QVector3D::dotProduct(ab, pv);
+    if (qAbs(det) < 1e-9f)
+        return -1.0f;   // ray parallel to the triangle's plane
+
+    const float invDet = 1.0f / det;
+    const QVector3D tv = origin - a;
+    const float u = QVector3D::dotProduct(tv, pv) * invDet;
+    if (u < 0.0f || u > 1.0f)
+        return -1.0f;
+
+    const QVector3D qv = QVector3D::crossProduct(tv, ab);
+    const float v = QVector3D::dotProduct(dir, qv) * invDet;
+    if (v < 0.0f || u + v > 1.0f)
+        return -1.0f;
+
+    return QVector3D::dotProduct(ac, qv) * invDet;
+}
+
+} // namespace
+
+bool ModelView::pickPivot(qreal x, qreal y)
+{
+    if (width() <= 0 || height() <= 0)
+        return false;
+
+    // Normalised screen coordinates: 0,0 at the centre, +/-1 at the edges,
+    // y up — which is what the camera works in.
+    const float nx = float((x / width()) * 2.0 - 1.0);
+    const float ny = float(1.0 - (y / height()) * 2.0);
+
+    m_camera.setAspect(float(width() / height()));
+
+    QVector3D origin, dir;
+    m_camera.screenRay(nx, ny, &origin, &dir);
+
+    // Straight through every visible triangle: 16k of them on the reference
+    // model, once per tap rather than per frame, so a spatial index would be a
+    // structure to keep correct for nothing. Hidden layers are skipped — a
+    // pivot on something invisible is indistinguishable from a miss.
+    float best = -1.0f;
+    if (m_loader) {
+        const ScenePtr scene = m_loader->scene();
+        if (!scene.isNull()) {
+            for (int li = 0; li < scene->layers.size(); ++li) {
+                const SceneLayer &L = scene->layers.at(li);
+                if (!L.visible || L.primitive != PrimitiveTriangles)
+                    continue;
+                for (int i = 0; i + 2 < L.indices.size(); i += 3) {
+                    const int ia = int(L.indices.at(i))     * kFloatsPerVertex;
+                    const int ib = int(L.indices.at(i + 1)) * kFloatsPerVertex;
+                    const int ic = int(L.indices.at(i + 2)) * kFloatsPerVertex;
+                    if (ic + 2 >= L.vertices.size())
+                        continue;
+                    const QVector3D a(L.vertices.at(ia), L.vertices.at(ia + 1),
+                                      L.vertices.at(ia + 2));
+                    const QVector3D b(L.vertices.at(ib), L.vertices.at(ib + 1),
+                                      L.vertices.at(ib + 2));
+                    const QVector3D c(L.vertices.at(ic), L.vertices.at(ic + 1),
+                                      L.vertices.at(ic + 2));
+                    const float t = rayTriangle(origin, dir, a, b, c);
+                    if (t > 1e-4f && (best < 0.0f || t < best))
+                        best = t;
+                }
+            }
+        }
+    }
+
+    const bool hit = (best > 0.0f);
+    // A miss still sets a pivot, on the plane the model is framed in: the user
+    // pressed the button, aimed and tapped, and deserves an answer.
+    m_camera.setPivot(hit ? origin + dir * best
+                          : m_camera.screenPointOnPlane(nx, ny, m_camera.target()));
+
+    emit cameraChanged();
+    update();
+    return hit;
 }
 
 void ModelView::panBy(qreal dxPixels, qreal dyPixels)
@@ -1267,12 +1623,14 @@ void ModelView::panBy(qreal dxPixels, qreal dyPixels)
     if (m_sim.isActive())
         return;
     m_camera.pan(float(dxPixels), float(dyPixels), float(qMax(1.0, height())));
+    emit cameraChanged();
     update();
 }
 
 void ModelView::zoomBy(qreal factor)
 {
     m_camera.zoomBy(float(factor));
+    emit cameraChanged();
     update();
 }
 
@@ -1294,6 +1652,7 @@ void ModelView::fitToView()
             m_camera.frame(lo, hi, m_mode == Trampoline ? 1.0f : 1.15f);
         }
     }
+    emit cameraChanged();
     update();
 }
 
@@ -1341,6 +1700,7 @@ void ModelView::stepAxis(int which)
         return;
     m_camera.stepAxis(which);
     fitToView();          // also repaints
+    emit rotationModeChanged();   // stepAxis() leaves free rotation behind
     emit viewAxisChanged();
 }
 
@@ -1360,6 +1720,11 @@ void ModelView::setStandardView(const QString &name)
     if (n == QLatin1String("top"))        v = Camera::Top;
     else if (n == QLatin1String("front")) v = Camera::Front;
     else if (n == QLatin1String("right")) v = Camera::Right;
+
+    // setStandardView frames, and framing without a current aspect lets a wide
+    // model run off the sides in portrait. fitToView() has always done this.
+    if (height() > 0)
+        m_camera.setAspect(float(width() / height()));
 
     QVector3D lo, hi;
     if (m_loader && !m_loader->scene().isNull()) {

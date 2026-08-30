@@ -63,6 +63,46 @@ public:
     bool axisLocked() const { return m_axisLocked; }
 
     void orbit(float dYawDeg, float dPitchDeg);
+
+    /*
+      How a drag turns the model; one button cycles it.
+
+        Centred     the turntable above, about the centre of the screen.
+                    Stepping into it restores the whole view, not just the
+                    pivot: framed and centred at the opening perspective.
+        AboutPivot  the same turntable, about a point tapped on the model.
+        Free        an arcball; a two-finger twist rolls it.
+
+      Free is what the note at the top of this file argues against, and that
+      argument still holds — hence a cycle rather than a toggle, so Centred (or
+      any of X/Y/Z) is always one press away.
+    */
+    enum RotationMode { Centred = 0, AboutPivot = 1, Free = 2 };
+    void setRotationMode(RotationMode mode);
+    RotationMode rotationMode() const { return m_rotationMode; }
+
+    // The world point rotations turn about. Setting it does not move the camera.
+    void setPivot(const QVector3D &worldPoint);
+    void clearPivot();
+    bool hasPivot() const { return m_hasPivot; }
+    QVector3D pivot() const { return m_pivot; }
+
+    // Free only: a drag, in degrees about the camera's own right and up axes.
+    void rotateFree(float dRightDeg, float dUpDeg);
+    // Free only: a two-finger twist, about the view axis.
+    void roll(float dDeg);
+
+    // The camera's attitude, world -> camera, however it is being steered.
+    // Free mode keeps it directly; the turntable derives it from yaw and pitch.
+    QQuaternion orientation() const;
+
+    // Where a screen point lands on the camera-facing plane through `plane`.
+    // The fallback when a tap misses the model.
+    QVector3D screenPointOnPlane(float nx, float ny, const QVector3D &plane) const;
+
+    // A ray through a normalised screen point (0,0 centre, +/-1 the edges,
+    // y up), for picking. Direction is normalised.
+    void screenRay(float nx, float ny, QVector3D *origin, QVector3D *direction) const;
     // Pan is in screen pixels; the camera converts them to world units at the
     // target's depth so dragging feels the same whether zoomed in or out.
     void pan(float dxPixels, float dyPixels, float viewportHeightPixels);
@@ -109,6 +149,10 @@ public:
     void clearFarOverride();
 
 private:
+    // Moves the target so `m_pivot` stays where it is on screen after the
+    // attitude changed from `before`. Does nothing when there is no pivot.
+    void keepPivotFixed(const QQuaternion &before);
+
     QVector3D m_target;
     float m_distance;
     float m_yawDeg;     // rotation about +Z
@@ -118,6 +162,12 @@ private:
     float m_sceneRadius; // remembered from the last frame() for near/far
     float m_farOverride; // 0 = derive from the model as usual
     bool m_axisLocked;
+    RotationMode m_rotationMode;
+    // Free mode's attitude. Seeded from yaw/pitch on entry and folded back into
+    // them on exit, so neither switch moves the model.
+    QQuaternion m_orientation;
+    bool m_hasPivot;
+    QVector3D m_pivot;
     // Turns applied to the world in the locked view. Composed on the LEFT, so
     // every press turns about a fixed world axis rather than about whichever
     // way the model happens to be facing — that is what keeps "the underside
