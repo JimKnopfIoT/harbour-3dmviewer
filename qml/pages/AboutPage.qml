@@ -48,6 +48,18 @@ Page {
                          + "file.")
             }
 
+            SectionHeader { text: qsTr("Developer") }
+
+            TextSwitch {
+                text: qsTr("Physics workbench")
+                description: qsTr("Adds a page after the deep room with a slider "
+                                + "for every value the falling and bouncing runs "
+                                + "on. Off by default — it is a workbench, not a "
+                                + "feature.")
+                checked: physics.enabled
+                onClicked: physics.enabled = !physics.enabled
+            }
+
             SectionHeader { text: qsTr("How to use it") }
 
             Label {
@@ -85,18 +97,6 @@ Page {
                          + "skipped.\n\n"
                          + "Whatever cannot be shown is said out loud, never left "
                          + "silently missing.")
-            }
-
-            SectionHeader { text: qsTr("Developer") }
-
-            TextSwitch {
-                text: qsTr("Physics workbench")
-                description: qsTr("Adds a page after the deep room with a slider "
-                                + "for every value the falling and bouncing runs "
-                                + "on. Off by default — it is a workbench, not a "
-                                + "feature.")
-                checked: physics.enabled
-                onClicked: physics.enabled = !physics.enabled
             }
 
             SectionHeader { text: qsTr("Credits and licence") }
