@@ -1,7 +1,7 @@
 # Neutral packaging metadata — no personal identifiers (see CLAUDE.md anonymity rules).
 Name:       harbour-3dmviewer
 Summary:    Viewer for CAD models and sliced G-code
-Version:    0.1.3
+Version:    0.1.4
 Release:    1
 # ANONYMITY: neutral build host so built RPMs carry no real hostname/domain.
 # Without this, the RPM BUILDHOST tag leaks the build machine's name and LAN
@@ -93,6 +93,12 @@ desktop-file-install --delete-original \
 %{_datadir}/icons/hicolor/*/apps/%{name}.png
 
 %changelog
+* Wed Sep 02 2026 harbour-3dmviewer contributors 0.1.4-1
+- Move the About page's "Physics workbench" switch up to just below the
+  opening description. It used to sit between the limitations and the
+  credits, far enough down that it was off the first screen and easy to
+  miss entirely.
+
 * Sun Aug 30 2026 harbour-3dmviewer contributors 0.1.3-1
 - Fix the startup crash on devices with a newer Android base (reproduced on a
   Jolla J2). openNURBS present in the executable image killed the EGL setup
