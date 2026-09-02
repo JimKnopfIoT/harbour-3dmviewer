@@ -48,8 +48,9 @@ Page {
                          + "file.")
             }
 
-            SectionHeader { text: qsTr("Developer") }
-
+            // Directly under the intro and above everything else, because it
+            // has to be reachable without scrolling: a section header of its
+            // own pushed it off the first screen on the phone.
             TextSwitch {
                 text: qsTr("Physics workbench")
                 description: qsTr("Adds a page after the deep room with a slider "
