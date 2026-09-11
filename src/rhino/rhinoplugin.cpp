@@ -9,11 +9,23 @@
   executable image at process start kills the Android EGL setup on hybris
   devices with a newer Android base: the process dies in the bionic linker
   while EGL queries SurfaceFlinger's config store, before main() gets past
-  showing the window. Measured on a Jolla J2, 2026-08-30; a single ON_String
-  reference is enough, and moving ON::Begin() later does not help — it is the
-  archive being in the image. Loading it after the window exists is safe.
-  Ruled out by the same probe (tools/startup-probe): image size, heap size and
-  fragmentation, the libGLESv2 DT_NEEDED, locale, symbol exports.
+  showing the window. Measured on a Jolla Phone (2026), 2026-08-30; a single
+  ON_String reference is enough, and moving ON::Begin() later does not help —
+  it is the archive being in the image. Loading it after the window exists is
+  safe. Ruled out by the same probe (tools/startup-probe): image size, heap size
+  and fragmentation, the libGLESv2 DT_NEEDED, locale, symbol exports.
+
+  What it actually is, measured 2026-09-11 with a probe that varied nothing but
+  that one thing: the executable's thread-local image. On aarch64 that block
+  starts at thread
+  pointer + 16, the region bionic claims for its own slots, and the executable
+  is always the first TLS module — ahead of the libtls-padding.so that
+  /etc/ld.so.preload loads to reserve it. openNURBS brings UUID generator code
+  whose state_fd = -2 lands on that word; the Android side reads it and follows
+  it as a pointer, and the process dies at 0xfffffffe. The same image without
+  openNURBS kills a bare Silica window just as reliably, so any dependency with
+  an initialised thread_local can bring this back: keep the executable free of
+  TLS, and check with readelf -lW before a release.
 
   The reading itself is unchanged from when this lived in io/rhinoreader.cpp;
   see io/rhinoreader.h for what the format costs us.
