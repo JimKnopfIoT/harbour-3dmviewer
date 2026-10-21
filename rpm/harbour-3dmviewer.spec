@@ -1,4 +1,4 @@
-# Neutral packaging metadata — no personal identifiers (see CLAUDE.md anonymity rules).
+# Neutral packaging metadata — no personal identifiers.
 Name:       harbour-3dmviewer
 Summary:    Viewer for CAD models and sliced G-code
 Version:    0.1.4
