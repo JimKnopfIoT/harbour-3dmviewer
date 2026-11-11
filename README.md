@@ -131,7 +131,7 @@ If something still goes wrong, please open an issue with your device model and
 the output of `harbour-3dmviewer` launched from the Terminal **on the phone**
 (over ssh there is no Wayland session and the error you get is a different one).
 
-AI assisted development
+LLM assisted development
 
 ## Licence and credits
 
